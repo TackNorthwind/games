@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NIGHT VAMPIRE</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            color: #fff;
+            font-family: 'Georgia', serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 32px;
+            letter-spacing: 6px;
+            color: #dc2626;
+            text-shadow: 2px 2px 0px #450a0a, 0 0 15px rgba(220, 38, 38, 0.8);
+            font-family: 'Times New Roman', Times, serif;
+        }
+
+        #game-container {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #ui-panel {
+            position: absolute;
+            top: 15px;
+            left: 20px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ui-label {
+            font-weight: bold;
+            color: #fca5a5;
+            letter-spacing: 2px;
+            font-size: 14px;
+            text-shadow: 1px 1px 0 #000;
+        }
+
+        .hp-bar-bg {
+            width: 160px;
+            height: 14px;
+            background: #27272a;
+            border: 2px solid #52525b;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        #player-hp {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #dc2626, #f87171);
+            transition: width 0.2s;
+        }
+
+        #boss-ui {
+            display: none;
+            margin-top: 10px;
+        }
+
+        #boss-hp {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #7c3aed, #c084fc);
+            transition: width 0.2s;
+        }
+
+        canvas {
+            border: 6px solid #1c1917;
+            border-radius: 4px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9), 0 0 30px rgba(153, 27, 27, 0.3);
+            background: #0f0a0a;
+        }
+
+        #controls {
+            margin-top: 15px;
+            font-size: 14px;
+            color: #a8a29e;
+            text-align: center;
+            line-height: 1.8;
+            background: #1c1917;
+            padding: 10px 24px;
+            border-radius: 8px;
+            border: 1px solid #292524;
+        }
+
+        kbd {
+            background: #292524;
+            color: #e7e5e4;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-family: monospace;
+            border-bottom: 2px solid #000;
+            margin: 0 3px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>NIGHT VAMPIRE</h1>
+
+    <div id="game-container">
+        <div id="ui-panel">
+            <div class="ui-label">PLAYER</div>
+            <div class="hp-bar-bg"><div id="player-hp"></div></div>
+            <div id="boss-ui">
+                <div class="ui-label" style="color:#c084fc;">COUNT VLAD</div>
+                <div class="hp-bar-bg"><div id="boss-hp"></div></div>
+            </div>
+        </div>
+        <canvas id="gameCanvas" width="800" height="480"></canvas>
+        <div id="controls">
+            【移動】: <kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd> &nbsp;&nbsp;|&nbsp;&nbsp; 
+            【ジャンプ】: <kbd>Z</kbd> または <kbd>Space</kbd> &nbsp;&nbsp;|&nbsp;&nbsp; 
+            【ムチで攻撃】: <kbd>X</kbd><br>
+            【リスタート】: <kbd>R</kbd>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const TILE_SIZE = 48;
+const GRAVITY = 0.6;
+const FRICTION = 0.8;
+const MAX_FALL_SPEED = 14;
+
+let gameState = 'playing';
+let keys = {};
+let lastTime = 0;
+const fpsInterval = 1000 / 60;
+let camera = { x: 0 };
+let screenShake = 0;
+
+let map =[];
+let mapWidth = 0;
+let mapHeight = 0;
+let enemies = [];
+let fireballs = [];
+let particles =[];
+let goal = null;
+
+// ★ボスの初期位置（V）を、空中の行から一番下の床の行(r=8)に下げて接地させました
+const levelData =[
+    "111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+    "100000000000000000000000000000000000000000000000000000000000000000000000000000001",
+    "100000000000000000000000000000000000000000000000000000000000000000000000000000001",
+    "100000000000B000000000000B0000000000000B00000000000000111111000000000000000000001",
+    "100000000000000000111100000000000011100000000001111000011000000000000000000000001",
+    "100000000111000001100110000000000110000000111001100110011000000000000000000000001",
+    "100P000011000Z00110000111100Z0001100000001100001100001111000000000000000000000001",
+    "111110011000111110000000001111111000011111000011000000000000000000000000000000001",
+    "10000011000000000000000000000000000000000000011000000000000000000000000V000000001",
+    "111111111111111112222222222222222222111111111222222222111111111111111111111111111"
+];
+
+let player = {
+    x: 0, y: 0, vx: 0, vy: 0, width: 24, height: 42,
+    speed: 3.5, jumpPower: 11.5, grounded: false, facing: 1, 
+    hp: 100, maxHp: 100, invulnTimer: 0,
+    whipTimer: 0, stunTimer: 0
+};
+
+// --- ボス(吸血鬼) ---
+let boss = {
+    active: false, state: 'hidden', timer: 0,
+    x: 0, y: 0, width: 40, height: 56,
+    hp: 80, maxHp: 80, hitTimer: 0, alpha: 1
+};
+
+// --- バロック音楽システム ---
+let audioCtx;
+let bgmInterval;
+let inBossRoom = false;
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playTone(freq, type, duration, vol=0.1, attack=0.01) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type; 
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    
+    gain.gain.setValueAtTime(0, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(vol, audioCtx.currentTime + attack);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + duration);
+}
+
+function playNoise(duration, vol=0.2) {
+    if (!audioCtx) return;
+    const bufferSize = audioCtx.sampleRate * duration;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
+    const filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 800;
+    const gain = audioCtx.createGain(); gain.gain.setValueAtTime(vol, audioCtx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+    noise.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+    noise.start();
+}
+
+function playSE(type) {
+    if (type === 'whip') playNoise(0.2, 0.4); 
+    if (type === 'jump') playTone(150, 'triangle', 0.2, 0.1);
+    if (type === 'hit') playNoise(0.3, 0.5); 
+    if (type === 'enemyHit') playTone(200, 'sawtooth', 0.1, 0.1); 
+    if (type === 'fire') playTone(100, 'square', 0.4, 0.1);
+    if (type === 'explode') playNoise(0.8, 0.6);
+    if (type === 'teleport') playTone(600, 'sine', 0.5, 0.05);
+}
+
+const melody =[
+    {n:587.33, d:1}, {n:659.25, d:1}, {n:698.46, d:2}, {n:880.00, d:2}, {n:698.46, d:2},
+    {n:659.25, d:1}, {n:587.33, d:1}, {n:554.37, d:2}, {n:880.00, d:2}, {n:554.37, d:2},
+    {n:587.33, d:2}, {n:698.46, d:2}, {n:880.00, d:4},
+    {n:783.99, d:2}, {n:698.46, d:2}, {n:659.25, d:4}
+];
+const bass =[
+    {n:146.83, d:4}, {n:146.83, d:4},
+    {n:138.59, d:4}, {n:138.59, d:4},
+    {n:146.83, d:4}, {n:174.61, d:4},
+    {n:196.00, d:4}, {n:220.00, d:4}
+];
+
+let mIdx = 0, bIdx = 0, mTick = 0, bTick = 0;
+
+function startBGM() {
+    if (bgmInterval) return;
+    mIdx = 0; bIdx = 0; mTick = 0; bTick = 0;
+    bgmInterval = setInterval(() => {
+        if (gameState !== 'playing') return;
+        
+        if (mTick <= 0) {
+            let note = melody[mIdx];
+            playTone(note.n, 'square', note.d * 0.2, 0.08, 0.01);
+            mTick = note.d;
+            mIdx = (mIdx + 1) % melody.length;
+        }
+        
+        if (bTick <= 0) {
+            let note = bass[bIdx];
+            let vol = inBossRoom ? 0.15 : 0.08;
+            let type = inBossRoom ? 'sawtooth' : 'triangle';
+            playTone(note.n, type, note.d * 0.2, vol, 0.05);
+            if (inBossRoom) playNoise(0.1, 0.1); 
+            bTick = note.d;
+            bIdx = (bIdx + 1) % bass.length;
+        }
+        
+        mTick--; bTick--;
+    }, 200);
+}
+
+function initGame() {
+    mapWidth = levelData[0].length;
+    mapHeight = levelData.length;
+    map = []; enemies = []; fireballs = []; particles =[]; goal = null;
+    inBossRoom = false;
+
+    player.hp = player.maxHp; player.vx = 0; player.vy = 0; 
+    player.invulnTimer = 0; player.whipTimer = 0; player.stunTimer = 0;
+    
+    boss.active = false; boss.state = 'hidden'; boss.hp = boss.maxHp;
+    document.getElementById('boss-ui').style.display = 'none';
+
+    gameState = 'playing';
+    document.getElementById('player-hp').style.width = '100%';
+
+    for (let r = 0; r < mapHeight; r++) {
+        map[r] =[];
+        for (let c = 0; c < mapWidth; c++) {
+            let char = levelData[r][c];
+            if (char === '1') map[r][c] = 1; else if (char === '2') map[r][c] = 2; else map[r][c] = 0;
+
+            if (char === 'P') {
+                player.x = c * TILE_SIZE + (TILE_SIZE - player.width) / 2;
+                player.y = r * TILE_SIZE + (TILE_SIZE - player.height);
+            }
+            if (char === 'Z') enemies.push({ type: 'zombie', x: c * TILE_SIZE, y: r * TILE_SIZE + (TILE_SIZE - 40), width: 26, height: 40, vx: -1, hp: 2, hitTimer: 0 });
+            if (char === 'B') enemies.push({ type: 'bat', x: c * TILE_SIZE, y: r * TILE_SIZE, startY: r * TILE_SIZE, width: 24, height: 16, vx: 0, state: 'hang', time: 0, hp: 1, hitTimer: 0 });
+            // ボス初期配置時も確実に床の上に接地するように調整
+            if (char === 'V') { 
+                boss.x = c * TILE_SIZE; 
+                boss.y = r * TILE_SIZE + TILE_SIZE - boss.height; 
+            }
+        }
+    }
+}
+
+window.addEventListener('keydown', e => {
+    initAudio(); startBGM();
+    const key = e.key.toLowerCase(); keys[key] = true;
+
+    if (gameState !== 'playing') {
+        if (key === 'r') initGame();
+        return;
+    }
+
+    if ((key === 'z' || key === ' ') && player.grounded && player.whipTimer === 0 && player.stunTimer === 0) {
+        player.vy = -player.jumpPower; 
+        player.grounded = false; 
+        playSE('jump');
+    }
+    
+    if (key === 'x' && player.whipTimer === 0 && player.stunTimer === 0) {
+        player.whipTimer = 18;
+        if (player.grounded) player.vx = 0; 
+        playSE('whip');
+    }
+});
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+function rectIntersect(r1, r2) {
+    return r1.x < r2.x + r2.width && r1.x + r1.width > r2.x && r1.y < r2.y + r2.height && r1.y + r1.height > r2.y;
+}
+
+function checkMapCollision(obj, dx, dy) {
+    let res = { hitX: false, hitY: false, spike: false };
+    
+    obj.x += dx;
+    let gridXStart = Math.floor((obj.x + 2) / TILE_SIZE);
+    let gridXEnd = Math.floor((obj.x + obj.width - 2.1) / TILE_SIZE);
+    let gridYStart = Math.floor((obj.y + 2) / TILE_SIZE);
+    let gridYEnd = Math.floor((obj.y + obj.height - 2.1) / TILE_SIZE);
+
+    for (let r = gridYStart; r <= gridYEnd; r++) {
+        for (let c = gridXStart; c <= gridXEnd; c++) {
+            if (r < 0 || r >= mapHeight || c < 0 || c >= mapWidth) continue;
+            if (map[r][c] === 1) {
+                if (dx > 0) obj.x = c * TILE_SIZE - obj.width + 2; else if (dx < 0) obj.x = (c + 1) * TILE_SIZE - 2;
+                res.hitX = true;
+            } else if (map[r][c] === 2) res.spike = true;
+        }
+    }
+
+    obj.y += dy;
+    gridXStart = Math.floor((obj.x + 2) / TILE_SIZE);
+    gridXEnd = Math.floor((obj.x + obj.width - 2.1) / TILE_SIZE);
+    gridYStart = Math.floor((obj.y) / TILE_SIZE);
+    gridYEnd = Math.floor((obj.y + obj.height - 0.1) / TILE_SIZE);
+
+    for (let r = gridYStart; r <= gridYEnd; r++) {
+        for (let c = gridXStart; c <= gridXEnd; c++) {
+            if (r < 0 || r >= mapHeight || c < 0 || c >= mapWidth) continue;
+            if (map[r][c] === 1) {
+                if (dy > 0) { obj.y = r * TILE_SIZE - obj.height; obj.grounded = true; } else if (dy < 0) obj.y = (r + 1) * TILE_SIZE;
+                res.hitY = true;
+            } else if (map[r][c] === 2) res.spike = true;
+        }
+    }
+    return res;
+}
+
+function createParticles(x, y, color, count) {
+    for (let i = 0; i < count; i++) particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 8, vy: (Math.random() - 0.5) * 8, life: 15 + Math.random() * 15, color: color, radius: 2 + Math.random() * 3 });
+}
+
+function update() {
+    if (gameState !== 'playing') return;
+
+    if (player.stunTimer > 0) {
+        player.stunTimer--;
+    } else if (player.whipTimer === 0 || !player.grounded) {
+        if (keys['arrowleft'] || keys['a']) { player.vx -= 1; player.facing = -1; }
+        if (keys['arrowright'] || keys['d']) { player.vx += 1; player.facing = 1; }
+    }
+
+    if (player.whipTimer > 0 && player.grounded) player.vx = 0;
+    
+    player.vx *= FRICTION; 
+    player.vy += GRAVITY;
+    if (player.vy > MAX_FALL_SPEED) player.vy = MAX_FALL_SPEED;
+    if (player.vx > player.speed) player.vx = player.speed;
+    if (player.vx < -player.speed) player.vx = -player.speed;
+
+    player.grounded = false;
+    let col = checkMapCollision(player, player.vx, player.vy);
+    if (col.hitY) player.vy = 0;
+
+    if (player.invulnTimer > 0) player.invulnTimer--;
+    
+    if (player.y > mapHeight * TILE_SIZE || col.spike) {
+        player.hp = 0;
+    }
+
+    if (player.hp <= 0) {
+        gameState = 'gameover'; playSE('hit');
+        document.getElementById('player-hp').style.width = '0%'; return;
+    }
+
+    if (goal && rectIntersect(player, goal)) { gameState = 'clear'; playSE('clear'); }
+
+    let cameraMaxX = mapWidth * TILE_SIZE - canvas.width;
+    if (!boss.active && boss.state === 'hidden' && player.x > cameraMaxX + 50) {
+        boss.active = true; boss.state = 'appear'; boss.timer = 60;
+        inBossRoom = true;
+        playSE('teleport'); screenShake = 20;
+        document.getElementById('boss-ui').style.display = 'block';
+        let shutterCol = Math.floor(cameraMaxX / TILE_SIZE) - 1;
+        for (let r = 1; r < mapHeight - 1; r++) map[r][shutterCol] = 1;
+    }
+
+    if (inBossRoom) {
+        camera.x = cameraMaxX;
+    } else {
+        camera.x = player.x + player.width / 2 - canvas.width / 2;
+        if (camera.x < 0) camera.x = 0;
+        if (camera.x > cameraMaxX) camera.x = cameraMaxX;
+    }
+
+    if (player.whipTimer > 0) {
+        player.whipTimer--;
+        if (player.whipTimer === 8) { 
+            let whipBox = {
+                x: player.facing === 1 ? player.x + player.width : player.x - 64,
+                y: player.y + 10,
+                width: 64, height: 16
+            };
+            
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let e = enemies[i];
+                if (rectIntersect(whipBox, e)) {
+                    e.hp -= 2; e.hitTimer = 8; playSE('enemyHit');
+                    createParticles(e.x + e.width/2, e.y + e.height/2, '#f87171', 8);
+                    if (e.hp <= 0) { playSE('explode'); createParticles(e.x + e.width/2, e.y + e.height/2, '#991b1b', 20); enemies.splice(i, 1); }
+                }
+            }
+
+            if (boss.active && boss.state !== 'hidden' && rectIntersect(whipBox, boss)) {
+                boss.hp -= 3; boss.hitTimer = 8; playSE('enemyHit');
+                createParticles(boss.x + boss.width/2, boss.y + boss.height/2, '#c084fc', 15);
+                document.getElementById('boss-hp').style.width = Math.max(0, boss.hp / boss.maxHp * 100) + '%';
+                if (boss.hp <= 0) { boss.state = 'dead'; boss.timer = 150; }
+            }
+        }
+    }
+
+    if (boss.active && boss.hp > 0) {
+        if (boss.hitTimer > 0) boss.hitTimer--;
+        boss.timer--;
+        
+        if (boss.state === 'appear') {
+            boss.alpha = 1 - (boss.timer / 60);
+            if (boss.timer <= 0) { boss.state = 'idle'; boss.timer = 30; boss.alpha = 1; }
+        } else if (boss.state === 'idle') {
+            if (boss.timer <= 0) { boss.state = 'attack'; boss.timer = 40; playSE('fire'); }
+        } else if (boss.state === 'attack') {
+            if (boss.timer === 20) {
+                let dx = (player.x + player.width/2) - (boss.x + boss.width/2);
+                let dy = (player.y + player.height/2) - (boss.y + boss.height/2);
+                let dist = Math.hypot(dx, dy);
+                let vx = (dx/dist)*4.5, vy = (dy/dist)*4.5;
+                // ★弾が手元（少し低め）から発射されるように調整
+                fireballs.push({x: boss.x+20, y: boss.y+20, vx: vx, vy: vy, radius: 8});
+                fireballs.push({x: boss.x+20, y: boss.y+20, vx: vx*0.8, vy: vy*0.8 - 2, radius: 8});
+                fireballs.push({x: boss.x+20, y: boss.y+20, vx: vx*0.8, vy: vy*0.8 + 2, radius: 8});
+            }
+            if (boss.timer <= 0) { boss.state = 'vanish'; boss.timer = 40; playSE('teleport'); }
+        } else if (boss.state === 'vanish') {
+            boss.alpha = boss.timer / 40;
+            if (boss.timer <= 0) { 
+                boss.state = 'hidden'; boss.timer = 30; boss.alpha = 0; 
+                let newX;
+                do {
+                    newX = cameraMaxX + 50 + Math.random() * (canvas.width - 150);
+                } while (Math.abs(newX - player.x) < 150);
+                boss.x = newX;
+                // ★ワープ時も確実に一番下の床（9段目）の上に接地させる
+                boss.y = 9 * TILE_SIZE - boss.height; 
+            }
+        } else if (boss.state === 'hidden') {
+            if (boss.timer <= 0) { boss.state = 'appear'; boss.timer = 60; }
+        }
+
+        if (boss.state !== 'hidden' && rectIntersect(player, boss) && player.invulnTimer <= 0) {
+            damagePlayer(15, boss.x);
+        }
+    }
+
+    if (boss.state === 'dead') {
+        if (boss.timer % 10 === 0) {
+            playSE('explode'); screenShake = 6;
+            createParticles(boss.x + Math.random()*boss.width, boss.y + Math.random()*boss.height, '#c084fc', 20);
+        }
+        boss.alpha = boss.timer / 150;
+        boss.timer--;
+        if (boss.timer <= 0) {
+            boss.active = false; boss.state = 'cleared'; inBossRoom = false;
+            goal = { x: boss.x, y: 9 * TILE_SIZE - TILE_SIZE, width: TILE_SIZE, height: TILE_SIZE }; 
+        }
+    }
+
+    for (let i = fireballs.length - 1; i >= 0; i--) {
+        let f = fireballs[i]; f.x += f.vx; f.y += f.vy;
+        let gridX = Math.floor(f.x / TILE_SIZE), gridY = Math.floor(f.y / TILE_SIZE);
+        if (gridX < 0 || gridX >= mapWidth || gridY < 0 || gridY >= mapHeight || map[gridY][gridX] === 1) {
+            createParticles(f.x, f.y, '#f97316', 5);
+            fireballs.splice(i, 1); continue;
+        }
+        if (rectIntersect({x: f.x-f.radius, y: f.y-f.radius, width: f.radius*2, height: f.radius*2}, player) && player.invulnTimer <= 0) {
+            damagePlayer(15, f.x);
+            fireballs.splice(i, 1); continue;
+        }
+        if (player.whipTimer > 0 && player.whipTimer < 10) {
+            let whipBox = { x: player.facing === 1 ? player.x + player.width : player.x - 64, y: player.y + 10, width: 64, height: 16 };
+            if (rectIntersect(whipBox, {x: f.x-f.radius, y: f.y-f.radius, width: f.radius*2, height: f.radius*2})) {
+                createParticles(f.x, f.y, '#f97316', 10);
+                fireballs.splice(i, 1); continue;
+            }
+        }
+    }
+
+    enemies.forEach(e => {
+        if (e.hitTimer > 0) e.hitTimer--;
+        
+        if (e.type === 'zombie') {
+            e.vy += GRAVITY;
+            let ecol = checkMapCollision(e, e.vx, e.vy);
+            if (ecol.hitX) e.vx *= -1; if (ecol.hitY) e.vy = 0;
+            let edgeGridX = Math.floor((e.x + (e.vx > 0 ? e.width : 0)) / TILE_SIZE);
+            let footGridY = Math.floor((e.y + e.height) / TILE_SIZE);
+            if (footGridY < mapHeight && map[footGridY][edgeGridX] === 0) e.vx *= -1;
+            
+        } else if (e.type === 'bat') {
+            if (e.state === 'hang') {
+                if (Math.abs(player.x - e.x) < 200) { e.state = 'fly'; e.vx = player.x < e.x ? -3 : 3; playSE('whip'); }
+            } else {
+                e.time += 0.1; e.x += e.vx; e.y = e.startY + Math.sin(e.time) * 30 + 30; 
+            }
+        }
+
+        if (player.invulnTimer <= 0 && rectIntersect(player, e)) {
+            damagePlayer(15, e.x);
+        }
+    });
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+        let p = particles[i]; p.x += p.vx; p.y += p.vy; p.life--; p.radius *= 0.95;
+        if (p.life <= 0 || p.radius < 0.5) particles.splice(i, 1);
+    }
+}
+
+function damagePlayer(amount, sourceX) {
+    player.hp -= amount; 
+    player.invulnTimer = 60; 
+    player.stunTimer = 15; 
+    player.vx = (player.x < sourceX ? -1 : 1) * 6; 
+    player.vy = -4;
+    playSE('hit'); 
+    document.getElementById('player-hp').style.width = Math.max(0, player.hp) + '%';
+}
+
+function render() {
+    ctx.fillStyle = '#0f0a0a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    let camX = Math.floor(camera.x);
+    let camY = 0;
+    if (screenShake > 0) { camX += (Math.random() - 0.5) * 8; camY += (Math.random() - 0.5) * 8; }
+    
+    ctx.translate(-camX * 0.3, camY);
+    for (let i = 0; i < mapWidth * TILE_SIZE; i += 300) {
+        ctx.fillStyle = '#1c1917';
+        ctx.fillRect(i, 50, 60, canvas.height); 
+        ctx.fillStyle = '#27272a';
+        ctx.beginPath(); ctx.arc(i + 150, 150, 40, Math.PI, 0); ctx.fill();
+        ctx.fillRect(i + 110, 150, 80, 150);
+        ctx.fillStyle = 'rgba(153, 27, 27, 0.2)'; 
+        ctx.fillRect(i + 115, 155, 70, 145);
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(-camX, camY);
+
+    if (goal) {
+        ctx.globalCompositeOperation = 'screen';
+        let gg = ctx.createRadialGradient(goal.x+24, goal.y+24, 0, goal.x+24, goal.y+24, 50);
+        gg.addColorStop(0, 'rgba(252, 211, 77, 0.8)'); gg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = gg; ctx.fillRect(goal.x - 30, goal.y - 30, 108, 108);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#fef08a'; ctx.beginPath(); ctx.arc(goal.x+24, goal.y+24, 16, 0, Math.PI*2); ctx.fill();
+    }
+
+    const startCol = Math.max(0, Math.floor(camX / TILE_SIZE));
+    const endCol = Math.min(mapWidth, Math.floor((camX + canvas.width) / TILE_SIZE) + 1);
+
+    for (let r = 0; r < mapHeight; r++) {
+        for (let c = startCol; c < endCol; c++) {
+            let x = c * TILE_SIZE, y = r * TILE_SIZE;
+            if (map[r][c] === 1) {
+                ctx.fillStyle = '#44403c'; ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                ctx.strokeStyle = '#1c1917'; ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, TILE_SIZE, TILE_SIZE);
+                ctx.beginPath();
+                ctx.moveTo(x, y + 16); ctx.lineTo(x + TILE_SIZE, y + 16);
+                ctx.moveTo(x, y + 32); ctx.lineTo(x + TILE_SIZE, y + 32);
+                ctx.moveTo(x + 16, y); ctx.lineTo(x + 16, y + 16);
+                ctx.moveTo(x + 32, y + 16); ctx.lineTo(x + 32, y + 32);
+                ctx.moveTo(x + 16, y + 32); ctx.lineTo(x + 16, y + 48);
+                ctx.stroke();
+            } else if (map[r][c] === 2) {
+                ctx.fillStyle = '#94a3b8'; ctx.beginPath();
+                ctx.moveTo(x, y + TILE_SIZE); ctx.lineTo(x + TILE_SIZE / 2, y + TILE_SIZE - 24); ctx.lineTo(x + TILE_SIZE, y + TILE_SIZE);
+                ctx.fill(); ctx.strokeStyle = '#e2e8f0'; ctx.stroke();
+            }
+        }
+    }
+
+    if (boss.active && boss.state !== 'hidden' || boss.state === 'dead') {
+        ctx.save();
+        ctx.globalAlpha = boss.alpha;
+        let cx = boss.x + boss.width/2, cy = boss.y + boss.height/2;
+        ctx.translate(cx, cy);
+        if (player.x < boss.x) ctx.scale(-1, 1); 
+
+        ctx.fillStyle = '#000'; 
+        ctx.beginPath();
+        if (boss.state === 'attack') {
+            ctx.moveTo(-10, -20); ctx.lineTo(-40, 28); ctx.lineTo(40, 28); ctx.lineTo(10, -20);
+            ctx.fill();
+            ctx.fillStyle = '#7f1d1d'; 
+            ctx.beginPath(); ctx.moveTo(-5, -20); ctx.lineTo(-30, 28); ctx.lineTo(30, 28); ctx.lineTo(5, -20); ctx.fill();
+        } else {
+            ctx.moveTo(-10, -20); ctx.lineTo(-20, 28); ctx.lineTo(20, 28); ctx.lineTo(10, -20);
+            ctx.fill();
+        }
+
+        ctx.fillStyle = '#fca5a5';
+        ctx.fillRect(-8, -28, 16, 16);
+        ctx.fillStyle = '#000'; 
+        ctx.fillRect(-10, -28, 20, 6);
+        ctx.fillRect(8, -28, 4, 16);
+        
+        ctx.fillStyle = '#dc2626';
+        ctx.fillRect(0, -22, 4, 2);
+
+        ctx.restore();
+    }
+
+    enemies.forEach(e => {
+        let cx = e.x + e.width / 2, cy = e.y + e.height / 2;
+        ctx.save();
+        if (e.hitTimer > 0) ctx.globalCompositeOperation = 'screen';
+        
+        ctx.translate(cx, cy); if (e.vx > 0) ctx.scale(-1, 1); ctx.translate(-cx, -cy);
+
+        if (e.type === 'zombie') {
+            ctx.fillStyle = e.hitTimer > 0 ? '#fff' : '#4d7c0f'; 
+            ctx.fillRect(e.x, e.y + 10, e.width, e.height - 10); 
+            ctx.fillRect(e.x + 4, e.y, 16, 16); 
+            ctx.fillStyle = '#1e293b'; 
+            ctx.fillRect(e.x - 4, e.y + 12, 10, 6); 
+        } else if (e.type === 'bat') {
+            ctx.fillStyle = e.hitTimer > 0 ? '#fff' : '#1c1917';
+            ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI*2); ctx.fill(); 
+            let wingY = e.state === 'fly' ? Math.sin(e.time * 10) * 8 : 0;
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - 12, cy - 8 + wingY); ctx.lineTo(cx - 16, cy + wingY); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + 12, cy - 8 + wingY); ctx.lineTo(cx + 16, cy + wingY); ctx.fill();
+        }
+        ctx.restore();
+    });
+
+    if (player.alive !== false && (player.invulnTimer === 0 || Math.floor(Date.now() / 50) % 2 === 0)) {
+        ctx.save();
+        let cx = player.x + player.width / 2, cy = player.y + player.height / 2;
+        ctx.translate(cx, cy); ctx.scale(player.facing, 1); ctx.translate(-cx, -cy);
+
+        ctx.fillStyle = '#451a03'; 
+        ctx.fillRect(player.x, player.y + 12, 20, 24);
+        
+        ctx.fillStyle = '#1c1917';
+        if (!player.grounded) {
+            ctx.fillRect(player.x + 2, player.y + 36, 8, 6);
+            ctx.fillRect(player.x + 14, player.y + 34, 8, 6);
+        } else {
+            ctx.fillRect(player.x + 4, player.y + 36, 6, 6);
+            ctx.fillRect(player.x + 14, player.y + 36, 6, 6);
+        }
+
+        ctx.fillStyle = '#fef08a'; ctx.fillRect(player.x + 6, player.y + 4, 12, 10);
+        ctx.fillStyle = '#000'; ctx.fillRect(player.x + 12, player.y + 6, 2, 2); 
+        
+        ctx.fillStyle = '#7f1d1d';
+        ctx.fillRect(player.x + 2, player.y, 18, 6);
+        ctx.fillRect(player.x, player.y + 4, 6, 8); 
+
+        ctx.fillStyle = '#d97706'; 
+        if (player.whipTimer > 10) {
+            ctx.fillRect(player.x - 4, player.y + 12, 14, 6);
+        } else if (player.whipTimer > 0) {
+            ctx.fillRect(player.x + 10, player.y + 12, 16, 6);
+            
+            ctx.globalCompositeOperation = 'screen';
+            ctx.strokeStyle = '#fef08a';
+            ctx.lineWidth = 3;
+            ctx.shadowBlur = 10; ctx.shadowColor = '#fef08a';
+            
+            ctx.beginPath();
+            ctx.moveTo(player.x + 26, player.y + 15);
+            ctx.quadraticCurveTo(player.x + 45, player.y + 25, player.x + 64, player.y + 15);
+            ctx.stroke();
+            
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(player.x + 64, player.y + 15, 4, 0, Math.PI*2); ctx.fill();
+            
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.shadowBlur = 0;
+        } else {
+            ctx.fillRect(player.x + 6, player.y + 14, 8, 12);
+        }
+
+        ctx.restore();
+    }
+
+    ctx.globalCompositeOperation = 'screen';
+    fireballs.forEach(f => {
+        let grad = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.radius * 2);
+        grad.addColorStop(0, '#ffffff'); grad.addColorStop(0.3, '#f97316'); grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(f.x, f.y, f.radius * 2, 0, Math.PI*2); ctx.fill();
+    });
+
+    particles.forEach(p => { ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2); ctx.fill(); });
+    ctx.globalCompositeOperation = 'source-over';
+    
+    ctx.restore(); 
+
+    if (gameState === 'gameover' || gameState === 'clear') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = 'center'; ctx.font = 'bold 40px "Times New Roman", serif';
+        if (gameState === 'gameover') { ctx.fillStyle = '#dc2626'; ctx.fillText('YOU DIED', canvas.width / 2, canvas.height / 2 - 20); }
+        else { ctx.fillStyle = '#fcd34d'; ctx.fillText('STAGE CLEARED', canvas.width / 2, canvas.height / 2 - 20); }
+        ctx.fillStyle = '#a8a29e'; ctx.font = '20px sans-serif'; ctx.fillText('Press [ R ] to Restart', canvas.width / 2, canvas.height / 2 + 30);
+    }
+}
+
+function gameLoop(timestamp) {
+    requestAnimationFrame(gameLoop);
+    const elapsed = timestamp - lastTime;
+    if (elapsed > fpsInterval) {
+        lastTime = timestamp - (elapsed % fpsInterval);
+        update(); render();
+    }
+}
+
+window.onload = () => { initGame(); requestAnimationFrame((t) => { lastTime = t; gameLoop(t); }); };
+</script>
+</body>
+</html>
